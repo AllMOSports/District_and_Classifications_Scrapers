@@ -97,58 +97,42 @@ def build_params(class_num: int, year_param) -> dict:
  
 def parse_canonical_names(soup: BeautifulSoup) -> set:
     """
-    Parse the flat school roster (the hidden data list at the top of the page)
-    to collect all *official* school names, including any parentheticals that
-    are genuinely part of the name (e.g. "Northeast (Cairo)").
+    Parse the flat school roster to collect all *official* school names.
  
-    The roster appears as a <ul> (or inline text block) where each school entry
-    looks like:
-        <li>27 Atlanta Logo Atlanta District 11 ...</li>
-    or as plain text data embedded in the page's school-list section.
+    Each entry in the MSHSAA flat roster renders as plain text like:
+        "246 Bucklin Logo Bucklin District 12 12 39.795 -92.879 fas fa-location-pin"
+        "392 Northeast (Cairo) Logo Northeast (Cairo) District 10 10 ..."
  
-    The most reliable signal: school names in the "School ID School District …"
-    block are separated from metadata by the word "Logo". We extract the token
-    immediately after "Logo" (which is the canonical display name).
+    The school name appears TWICE — once BEFORE "Logo" and once AFTER "Logo".
+    The name BEFORE "Logo" is always the clean canonical name with no sub-notes,
+    because MSHSAA only appends location/co-op notes in the district section display.
+ 
+    Examples of why before-Logo is correct:
+        "308 Grundy County Logo Grundy County (Newtown-Harris) District 12 ..."
+            → before Logo: "Grundy County"   ← canonical
+            → after Logo:  "Grundy County (Newtown-Harris)"  ← has sub-note already
+        "392 Northeast (Cairo) Logo Northeast (Cairo) District 10 ..."
+            → before Logo: "Northeast (Cairo)"  ← canonical (Cairo IS the name)
     """
     canonical = set()
  
-    # Strategy 1 – look for the hidden list items that contain "Logo" keyword
-    # (MSHSAA renders them as "ID  Name  Logo  Name  District  N  N  lat  lng  icon")
     raw_text = soup.get_text(" ", strip=True)
  
-    # Locate the school-id/roster block – it starts after "School ID School District"
+    # Locate the flat roster block which starts after the header row text
     roster_start = raw_text.find("School ID School District")
     if roster_start == -1:
         roster_start = 0
  
-    # Find the first district heading to know where the roster ends
-    dist_h4 = soup.find("h4")
-    roster_end = raw_text.find("District 1", roster_start + 30) if not dist_h4 else len(raw_text)
+    # Pattern: school ID (digits), then the canonical name, then " Logo"
+    # Handles names with parentheses like "Northeast (Cairo)"
+    before_logo = re.compile(r'\b(\d+)\s+(.+?)\s+Logo\b')
  
-    # Extract all tokens between "Logo" markers
-    # Pattern: "<name_before_logo> Logo <canonical_name> District <n>"
-    logo_pattern = re.compile(
-        r"Logo\s+"                       # the literal word "Logo"
-        r"((?:[A-Za-z0-9().,' \-]"       # name: starts with word char or special
-        r"(?:[^L]|L(?!ogo))*?)"          # continues until next Logo or District
-        r")\s+District\b",
-        re.DOTALL
-    )
-    for m in logo_pattern.finditer(raw_text[roster_start:]):
-        name = m.group(1).strip()
-        # Clean up stray whitespace
+    for m in before_logo.finditer(raw_text[roster_start:]):
+        name = m.group(2).strip()
         name = re.sub(r'\s+', ' ', name)
-        if name:
-            canonical.add(name)
- 
-    # Strategy 2 – anchor tags linking to school schedule pages contain the
-    # display name directly in the <img alt> or in the anchor text
-    for a in soup.select("a[href*='Schedule.aspx']"):
-        # The anchor text is often "Name Host" or just "Name"
-        name = a.get_text(" ", strip=True).replace(" Host", "").strip()
-        if name:
-            # This gives us the district-section name (may already have extra parens)
-            # We store it anyway to cross-reference
+        # Filter out noise – valid school names are at least 3 chars
+        # and the captured group shouldn't just be another number
+        if name and len(name) >= 3 and not name.isdigit():
             canonical.add(name)
  
     return canonical
