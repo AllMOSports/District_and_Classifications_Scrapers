@@ -22,8 +22,8 @@ jobs:
       - name: Debug - show repo structure
         run: find . -type f | sort
 
-      - name: Run scraper
-        run: python scrapers/mshsaa_bb_scraper.py
+      - name: Run debug
+        run: python mshsaa_debug.py
 
       - name: Upload Excel as artifact
         uses: actions/upload-artifact@v4
