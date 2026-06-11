@@ -19,9 +19,11 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4 lxml openpyxl
 
+      - name: Debug - show repo structure
+        run: find . -type f | sort
+
       - name: Run scraper
         run: python scrapers/mshsaa_bb_scraper.py
-        working-directory: ${{ github.workspace }}
 
       - name: Upload Excel as artifact
         uses: actions/upload-artifact@v4
