@@ -1,4 +1,4 @@
-name: Scrape BB Districts
+name: Scrape Girls Basketball Districts
 
 on:
   workflow_dispatch:   # run manually whenever you want
