@@ -128,10 +128,10 @@ def parse_canonical_names(soup: BeautifulSoup) -> set:
     # Extract all tokens between "Logo" markers
     # Pattern: "<name_before_logo> Logo <canonical_name> District <n>"
     logo_pattern = re.compile(
-        r'Logo\s+'                   # the literal word "Logo"
-        r'((?:[A-Za-z0-9().,'\''\-]'  # name: starts with word char or special
-        r'(?:[^L]|L(?!ogo))*?)'      # continues until next Logo or District
-        r')\s+District\b',
+        r"Logo\s+"                       # the literal word "Logo"
+        r"((?:[A-Za-z0-9().,' \-]"       # name: starts with word char or special
+        r"(?:[^L]|L(?!ogo))*?)"          # continues until next Logo or District
+        r")\s+District\b",
         re.DOTALL
     )
     for m in logo_pattern.finditer(raw_text[roster_start:]):
