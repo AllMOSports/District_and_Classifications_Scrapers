@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
  
 BASE_URL    = "https://www.mshsaa.org/Activities/ClassAndDistrictAssignments.aspx"
 ACTIVITY    = 38
-NUM_CLASSES = 4
+NUM_CLASSES = 5
  
 SEASONS = [
     ("2025-2026", None),
