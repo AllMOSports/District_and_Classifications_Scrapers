@@ -9,27 +9,16 @@ Usage:
 Output:
     baseball_districts.xlsx  (sheet "ALL TEAMS": Team Name, Class, District, Season)
  
-Name formatting logic:
-    Each MSHSAA page contains a flat school roster where every entry looks like:
-        "246 Bucklin Logo Bucklin District 12 ..."
-        "392 Northeast (Cairo) Logo Northeast (Cairo) District 10 ..."
+Name formatting:
+    The MSHSAA page contains a flat school roster where each entry is:
+        "246 Bucklin District 12 12 39.795118 -92.879557 fas fa-location-pin"
+        "392 Northeast (Cairo) District 10 10 39.511961 -92.442522 fas fa-location-pin"
  
-    The number is the school's unique MSHSAA ID. The name between the ID and
-    the word "Logo" is always the clean canonical school name with no sub-notes.
- 
-    District section anchors link to Schedule.aspx?s=<ID>, so we can look up
-    the canonical name by ID and compare it to the district display text:
-        - display == canonical              -> keep as-is
-        - display == canonical + "(note)"  -> "canonical with note"
- 
-    Examples:
-        ID 246  canonical "Bucklin"                    display "Bucklin (Macon County)"
-                -> "Bucklin with Macon County"
-        ID 392  canonical "Northeast (Cairo)"          display "Northeast (Cairo)"
-                -> "Northeast (Cairo)"   (exact match, kept as-is)
-        ID 454  canonical "Southwest (Livingston County)"
-                                                       display "Southwest (Livingston County) (Breckenridge)"
-                -> "Southwest (Livingston County) with Breckenridge"
+    We extract ID -> canonical name from this roster (the name between the
+    school ID and "District N N lat lng fas fa-"). We then look up each
+    district-section school by the s=ID in its anchor href and compare:
+        display == canonical              -> keep as-is
+        display == canonical + " (note)" -> "canonical with note"
  
 Requirements:
     pip install requests beautifulsoup4 lxml openpyxl
@@ -46,7 +35,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
  
-# ── constants ────────────────────────────────────────────────────────────────
+# ── constants ─────────────────────────────────────────────────────────────────
  
 BASE_URL    = "https://www.mshsaa.org/Activities/ClassAndDistrictAssignments.aspx"
 ACTIVITY    = 3
@@ -83,7 +72,7 @@ HEADERS = {
 REQUEST_DELAY = 1.5
 MAX_RETRIES   = 3
  
-# ── fetch ────────────────────────────────────────────────────────────────────
+# ── fetch ─────────────────────────────────────────────────────────────────────
  
 def fetch(url, params):
     for attempt in range(1, MAX_RETRIES + 1):
@@ -101,32 +90,36 @@ def fetch(url, params):
  
 def build_id_to_canonical(soup):
     """
-    Parse the flat school roster to build a dict of {school_id: canonical_name}.
+    Parse the flat school roster to build {school_id: canonical_name}.
  
-    Each roster entry in the page's plain text looks like:
-        "246 Bucklin Logo Bucklin District 12 12 39.795 -92.879 fas fa-location-pin"
-        "392 Northeast (Cairo) Logo Northeast (Cairo) District 10 10 ..."
+    Each roster entry in the live page text looks like:
+        "246 Bucklin District 12 12 39.795118 -92.879557 fas fa-location-pin"
+        "392 Northeast (Cairo) District 10 10 39.511961 -92.442522 fas fa-location-pin"
  
-    We extract the integer ID and the name that appears BEFORE the word "Logo".
-    That pre-Logo name is always the clean canonical school name — MSHSAA only
-    appends location/co-op notes in the district section display text, not here.
+    Pattern anchors on school IDs (1-4 digits), the name between ID and
+    "District N N", and the "fas fa-" icon suffix to avoid matching
+    lat/lng coordinate digits or other numbers in the page.
     """
     raw = soup.get_text(" ", strip=True)
  
-    # Anchor the search to the roster block
     start = raw.find("School ID School District")
     if start == -1:
         start = 0
  
-    # Match: <digits> <name> Logo
-    # The name can contain letters, digits, spaces, parens, periods, hyphens, apostrophes
-    pattern = re.compile(r'\b(\d+)\s+([\w][\w\s().,-]+?)\s+Logo\b')
+    entry_pattern = re.compile(
+        r'\b(\d{1,4})\s+'           # school ID (1-4 digits; IDs are all < 9999)
+        r'(.+?)\s+'                  # school name (non-greedy)
+        r'District\s+\d+\s+\d+\s+'  # "District N N" (number appears twice)
+        r'[-\d.]+\s+'               # latitude
+        r'[-\d.]+\s+'               # longitude
+        r'fas\s+fa-'                 # icon class prefix (ends every roster entry)
+    )
  
     id_map = {}
-    for m in pattern.finditer(raw[start:]):
+    for m in entry_pattern.finditer(raw[start:]):
         school_id = int(m.group(1))
         name = re.sub(r'\s+', ' ', m.group(2).strip())
-        if name and len(name) >= 2:
+        if name and len(name) >= 2 and school_id not in id_map:
             id_map[school_id] = name
  
     return id_map
@@ -134,8 +127,10 @@ def build_id_to_canonical(soup):
 # ── name formatting ───────────────────────────────────────────────────────────
  
 def strip_outer_parens(s):
-    """Remove outermost parens: '(Macon County)' -> 'Macon County'.
-    Handles nested: '(Jefferson (Conception))' -> 'Jefferson (Conception)'."""
+    """Remove outermost parens, preserving nested ones.
+    '(Macon County)' -> 'Macon County'
+    '(Jefferson (Conception))' -> 'Jefferson (Conception)'
+    """
     s = s.strip()
     if not (s.startswith("(") and s.endswith(")")):
         return s
@@ -146,24 +141,22 @@ def strip_outer_parens(s):
         elif ch == ")":
             depth -= 1
         if depth == 0 and i < len(s) - 1:
-            # Outer paren closed before end — parens don't wrap everything
-            return s
+            return s   # outer paren closes before the end — not wrapping everything
     return s[1:-1]
  
  
 def format_name(school_id, display_text, id_map):
     """
     Return the correctly formatted team name using the ID-based canonical lookup.
- 
-      - If display matches canonical exactly -> return as-is
-      - If display == canonical + " (note)"  -> return "canonical with note"
-      - Otherwise                            -> return display unchanged
+      display == canonical              -> return as-is
+      display == canonical + " (note)" -> "canonical with note"
+      no ID match                      -> return display unchanged
     """
-    display = display_text.strip()
+    display   = display_text.strip()
     canonical = id_map.get(school_id)
  
     if canonical is None:
-        log.debug("  No canonical found for ID %d (%r)", school_id, display)
+        log.debug("  No canonical for ID %d (%r)", school_id, display)
         return display
  
     if display == canonical:
@@ -175,8 +168,7 @@ def format_name(school_id, display_text, id_map):
             inner = strip_outer_parens(remainder)
             return f"{canonical} with {inner}"
  
-    # Display doesn't start with canonical — return as-is and log for review
-    log.debug("  Unexpected format ID=%d canonical=%r display=%r", school_id, canonical, display)
+    log.debug("  Unexpected: ID=%d canonical=%r display=%r", school_id, canonical, display)
     return display
  
 # ── scrape one class page ─────────────────────────────────────────────────────
@@ -189,20 +181,17 @@ def scrape_class(class_num, year_param, season_label):
     log.info("  Fetching Class %d  season %s", class_num, season_label)
     soup = fetch(BASE_URL, params)
  
-    # Build ID -> canonical name from the flat roster
     id_map = build_id_to_canonical(soup)
-    log.debug("    ID map size: %d", len(id_map))
+    log.info("    ID map: %d entries", len(id_map))
  
     records = []
  
-    # Each district is headed by an <h4> tag like "District 1"
     for h4 in soup.find_all("h4"):
         m = re.match(r"District\s+(\d+)", h4.get_text(strip=True))
         if not m:
             continue
         district_num = int(m.group(1))
  
-        # Find the <ul> of schools that follows this <h4>
         school_ul = None
         sibling = h4.find_next_sibling()
         while sibling:
@@ -222,14 +211,13 @@ def scrape_class(class_num, year_param, season_label):
             if not a:
                 continue
  
-            # Extract school ID from href: "Schedule.aspx?s=246&alg=5"
             href = a.get("href", "")
             id_match = re.search(r"[?&]s=(\d+)", href)
             if not id_match:
                 continue
             school_id = int(id_match.group(1))
  
-            raw_name = a.get_text(" ", strip=True).replace(" Host", "").strip()
+            raw_name  = a.get_text(" ", strip=True).replace(" Host", "").strip()
             formatted = format_name(school_id, raw_name, id_map)
  
             records.append({
@@ -242,7 +230,7 @@ def scrape_class(class_num, year_param, season_label):
     log.info("    -> %d teams", len(records))
     return records
  
-# ── scrape all seasons ────────────────────────────────────────────────────────
+# ── scrape all ────────────────────────────────────────────────────────────────
  
 def scrape_all():
     all_records = []
